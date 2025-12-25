@@ -1,12 +1,13 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import firebase_admin
-from firebase_admin import credentials, db, auth
+from firebase_admin import credentials, firestore, auth
 import os
 from dotenv import load_dotenv
 from datetime import datetime
 import uuid
 from functools import wraps
+import json
 
 # Load environment variables
 load_dotenv()
@@ -15,15 +16,30 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
-# Initialize Firebase
+# Initialize Firebase with Firestore
 try:
-    cred = credentials.Certificate('serviceAccountKey.json')
-    firebase_admin.initialize_app(cred, {
-        'databaseURL': os.getenv('FIREBASE_DATABASE_URL')
-    })
-    print("✅ Firebase initialized successfully")
+    # Try to read from environment variable first (for cloud deployment)
+    service_account_json = os.getenv('FIREBASE_SERVICE_ACCOUNT')
+    
+    if service_account_json:
+        # Running on cloud (Railway, Render, etc.)
+        print("🌐 Loading Firebase from environment variable...")
+        service_account = json.loads(service_account_json)
+        cred = credentials.Certificate(service_account)
+    else:
+        # Running locally
+        print("💻 Loading Firebase from local file...")
+        cred = credentials.Certificate('serviceAccountKey.json')
+    
+    firebase_admin.initialize_app(cred)
+    
+    # Initialize Firestore client
+    db = firestore.client()
+    
+    print("✅ Firebase with Firestore initialized successfully")
 except Exception as e:
     print(f"⚠️ Firebase initialization error: {e}")
+    db = None
 
 # ==================== HELPER FUNCTIONS ====================
 
@@ -60,9 +76,11 @@ def verify_firebase_token(f):
 def home():
     """API root endpoint"""
     return jsonify({
-        "message": "R.A.K.S.H.A Backend API - Minimal Version",
-        "version": "0.4.0",
+        "message": "R.A.K.S.H.A Backend API - Firestore Version",
+        "version": "0.4.0-firestore",
         "status": "running",
+        "database": "Firestore",
+        "environment": os.getenv('FLASK_ENV', 'development'),
         "endpoints": {
             "auth_register": "POST /api/auth/register",
             "auth_login": "POST /api/auth/login",
@@ -81,7 +99,9 @@ def health_check():
     """Health check endpoint"""
     return jsonify({
         "status": "healthy",
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat(),
+        "database": "Firestore",
+        "environment": os.getenv('FLASK_ENV', 'development')
     }), 200
 
 # ==================== AUTHENTICATION ROUTES ====================
@@ -122,17 +142,18 @@ def register_user():
         
         user_id = user.uid
         
-        # Create user profile in Realtime Database
-        user_ref = db.reference(f'users/{user_id}')
-        user_ref.set({
+        # Create user profile in Firestore
+        user_doc = db.collection('users').document(user_id)
+        user_doc.set({
             'profile': {
                 'name': name,
                 'email': email,
                 'phone': phone,
-                'created_at': datetime.now().isoformat()
+                'created_at': datetime.now()
             },
             'emergency_contacts': [],
-            'sos_history': {}
+            'created_at': datetime.now(),
+            'updated_at': datetime.now()
         })
         
         # Generate custom token for immediate login
@@ -183,9 +204,17 @@ def login_user():
         # Generate custom token
         custom_token = auth.create_custom_token(user_id)
         
-        # Get user profile from database
-        user_ref = db.reference(f'users/{user_id}/profile')
-        profile = user_ref.get()
+        # Get user profile from Firestore
+        user_doc = db.collection('users').document(user_id).get()
+        
+        if user_doc.exists:
+            profile = user_doc.to_dict().get('profile', {})
+        else:
+            profile = {
+                'name': user.display_name,
+                'email': user.email,
+                'phone': user.phone_number
+            }
         
         return jsonify({
             "success": True,
@@ -212,12 +241,21 @@ def get_user_profile():
     try:
         user_id = request.user_id
         
-        # Get user data from database
-        user_ref = db.reference(f'users/{user_id}')
-        user_data = user_ref.get()
+        # Get user document from Firestore
+        user_doc = db.collection('users').document(user_id).get()
         
-        if not user_data:
+        if not user_doc.exists:
             return jsonify({"error": "User not found"}), 404
+        
+        user_data = user_doc.to_dict()
+        
+        # Convert Firestore timestamps to ISO format
+        if 'created_at' in user_data:
+            user_data['created_at'] = user_data['created_at'].isoformat()
+        if 'updated_at' in user_data:
+            user_data['updated_at'] = user_data['updated_at'].isoformat()
+        if 'profile' in user_data and 'created_at' in user_data['profile']:
+            user_data['profile']['created_at'] = user_data['profile']['created_at'].isoformat()
         
         return jsonify({
             "success": True,
@@ -244,12 +282,15 @@ def update_user_profile():
         user_id = request.user_id
         data = request.get_json()
         
-        # Get current profile
-        profile_ref = db.reference(f'users/{user_id}/profile')
-        current_profile = profile_ref.get()
+        # Get current user document
+        user_ref = db.collection('users').document(user_id)
+        user_doc = user_ref.get()
         
-        if not current_profile:
+        if not user_doc.exists:
             return jsonify({"error": "User profile not found"}), 404
+        
+        user_data = user_doc.to_dict()
+        current_profile = user_data.get('profile', {})
         
         # Update allowed fields
         allowed_fields = ['name', 'phone', 'address', 'blood_group', 'medical_info']
@@ -259,10 +300,13 @@ def update_user_profile():
                 current_profile[field] = data[field]
         
         # Add last updated timestamp
-        current_profile['updated_at'] = datetime.now().isoformat()
+        current_profile['updated_at'] = datetime.now()
         
-        # Save updated profile
-        profile_ref.set(current_profile)
+        # Update in Firestore
+        user_ref.update({
+            'profile': current_profile,
+            'updated_at': datetime.now()
+        })
         
         # Update Firebase Auth display name and phone if changed
         update_data = {}
@@ -273,6 +317,10 @@ def update_user_profile():
         
         if update_data:
             auth.update_user(user_id, **update_data)
+        
+        # Convert timestamp to ISO format for response
+        if 'updated_at' in current_profile:
+            current_profile['updated_at'] = current_profile['updated_at'].isoformat()
         
         return jsonify({
             "success": True,
@@ -295,11 +343,6 @@ def update_emergency_contacts():
                 "name": "Mom",
                 "phone": "+919876543210",
                 "relation": "Mother"
-            },
-            {
-                "name": "Friend",
-                "phone": "+919876543211",
-                "relation": "Friend"
             }
         ]
     }
@@ -320,9 +363,12 @@ def update_emergency_contacts():
                     "error": "Each contact must have 'name' and 'phone'"
                 }), 400
         
-        # Update contacts in database
-        contacts_ref = db.reference(f'users/{user_id}/emergency_contacts')
-        contacts_ref.set(contacts)
+        # Update contacts in Firestore
+        user_ref = db.collection('users').document(user_id)
+        user_ref.update({
+            'emergency_contacts': contacts,
+            'updated_at': datetime.now()
+        })
         
         return jsonify({
             "success": True,
@@ -344,13 +390,19 @@ def get_emergency_contacts():
     try:
         user_id = request.user_id
         
-        contacts_ref = db.reference(f'users/{user_id}/emergency_contacts')
-        contacts = contacts_ref.get()
+        # Get user document
+        user_doc = db.collection('users').document(user_id).get()
+        
+        if not user_doc.exists:
+            return jsonify({"error": "User not found"}), 404
+        
+        user_data = user_doc.to_dict()
+        contacts = user_data.get('emergency_contacts', [])
         
         return jsonify({
             "success": True,
-            "contacts": contacts if contacts else [],
-            "count": len(contacts) if contacts else 0
+            "contacts": contacts,
+            "count": len(contacts)
         }), 200
         
     except Exception as e:
@@ -381,7 +433,7 @@ def trigger_sos():
         
         # Generate SOS ID
         sos_id = generate_sos_id()
-        timestamp = datetime.now().isoformat()
+        timestamp = datetime.now()
         
         # Create location URL for Google Maps
         lat = location.get('latitude', 0)
@@ -389,9 +441,14 @@ def trigger_sos():
         location_url = f"https://www.google.com/maps?q={lat},{lon}"
         
         # Get user profile for alert message
-        profile_ref = db.reference(f'users/{user_id}/profile')
-        profile = profile_ref.get()
-        user_name = profile.get('name', 'User') if profile else 'User'
+        user_doc = db.collection('users').document(user_id).get()
+        if user_doc.exists:
+            profile = user_doc.to_dict().get('profile', {})
+            user_name = profile.get('name', 'User')
+            emergency_contacts = user_doc.to_dict().get('emergency_contacts', [])
+        else:
+            user_name = 'User'
+            emergency_contacts = []
         
         # Create SOS record
         sos_data = {
@@ -405,30 +462,25 @@ def trigger_sos():
             'created_at': timestamp
         }
         
-        # Store in active SOS
-        sos_ref = db.reference(f'active_sos/{sos_id}')
-        sos_ref.set(sos_data)
+        # Store in Firestore - active_sos collection
+        db.collection('active_sos').document(sos_id).set(sos_data)
         
-        # Add to user's SOS history
-        user_sos_ref = db.reference(f'users/{user_id}/sos_history/{sos_id}')
-        user_sos_ref.set({
+        # Add to user's SOS history subcollection
+        db.collection('users').document(user_id).collection('sos_history').document(sos_id).set({
             'timestamp': timestamp,
             'location': location,
+            'location_url': location_url,
             'status': 'triggered',
             'trigger_type': trigger_type
         })
-        
-        # Get emergency contacts
-        contacts_ref = db.reference(f'users/{user_id}/emergency_contacts')
-        contacts = contacts_ref.get()
         
         return jsonify({
             "success": True,
             "sos_id": sos_id,
             "location_url": location_url,
             "message": "SOS triggered successfully",
-            "timestamp": timestamp,
-            "emergency_contacts": contacts if contacts else [],
+            "timestamp": timestamp.isoformat(),
+            "emergency_contacts": emergency_contacts,
             "alert_message": f"🚨 EMERGENCY! {user_name} needs help immediately! Location: {location_url}"
         }), 200
         
@@ -445,16 +497,25 @@ def get_sos_details(sos_id):
     try:
         user_id = request.user_id
         
-        # Get SOS data
-        sos_ref = db.reference(f'active_sos/{sos_id}')
-        sos_data = sos_ref.get()
+        # Get SOS document
+        sos_doc = db.collection('active_sos').document(sos_id).get()
         
-        if not sos_data:
+        if not sos_doc.exists:
             return jsonify({"error": "SOS not found"}), 404
         
-        # Verify user owns this SOS or is authorized
+        sos_data = sos_doc.to_dict()
+        
+        # Verify user owns this SOS
         if sos_data.get('user_id') != user_id:
             return jsonify({"error": "Unauthorized access"}), 403
+        
+        # Convert timestamps to ISO format
+        if 'timestamp' in sos_data:
+            sos_data['timestamp'] = sos_data['timestamp'].isoformat()
+        if 'created_at' in sos_data:
+            sos_data['created_at'] = sos_data['created_at'].isoformat()
+        if 'deactivated_at' in sos_data:
+            sos_data['deactivated_at'] = sos_data['deactivated_at'].isoformat()
         
         return jsonify({
             "success": True,
@@ -484,33 +545,37 @@ def deactivate_sos():
         if not sos_id:
             return jsonify({"error": "sos_id is required"}), 400
         
-        # Get SOS data to verify ownership
-        sos_ref = db.reference(f'active_sos/{sos_id}')
-        sos_data = sos_ref.get()
+        # Get SOS document to verify ownership
+        sos_ref = db.collection('active_sos').document(sos_id)
+        sos_doc = sos_ref.get()
         
-        if not sos_data:
+        if not sos_doc.exists:
             return jsonify({"error": "SOS not found"}), 404
+        
+        sos_data = sos_doc.to_dict()
         
         if sos_data.get('user_id') != user_id:
             return jsonify({"error": "Unauthorized access"}), 403
         
-        # Update status
+        deactivated_time = datetime.now()
+        
+        # Update status in active_sos
         sos_ref.update({
             'status': 'deactivated',
-            'deactivated_at': datetime.now().isoformat()
+            'deactivated_at': deactivated_time
         })
         
         # Update in user's history
-        user_sos_ref = db.reference(f'users/{user_id}/sos_history/{sos_id}')
-        user_sos_ref.update({
+        db.collection('users').document(user_id).collection('sos_history').document(sos_id).update({
             'status': 'deactivated',
-            'deactivated_at': datetime.now().isoformat()
+            'deactivated_at': deactivated_time
         })
         
         return jsonify({
             "success": True,
             "message": "SOS deactivated successfully",
-            "sos_id": sos_id
+            "sos_id": sos_id,
+            "deactivated_at": deactivated_time.isoformat()
         }), 200
         
     except Exception as e:
@@ -522,31 +587,32 @@ def get_sos_history():
     """
     Get user's SOS history (requires authentication)
     Headers: Authorization: Bearer <token>
+    Query params: ?limit=10 (optional)
     """
     try:
         user_id = request.user_id
+        limit = request.args.get('limit', 50, type=int)
         
-        # Get SOS history
-        history_ref = db.reference(f'users/{user_id}/sos_history')
-        history = history_ref.get()
+        # Get SOS history from subcollection
+        history_ref = db.collection('users').document(user_id).collection('sos_history')
+        history_query = history_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(limit)
         
-        if not history:
-            return jsonify({
-                "success": True,
-                "history": [],
-                "count": 0
-            }), 200
+        history_docs = history_query.stream()
         
-        # Convert to list format
         history_list = []
-        for sos_id, data in history.items():
+        for doc in history_docs:
+            sos_data = doc.to_dict()
+            
+            # Convert timestamps to ISO format
+            if 'timestamp' in sos_data:
+                sos_data['timestamp'] = sos_data['timestamp'].isoformat()
+            if 'deactivated_at' in sos_data:
+                sos_data['deactivated_at'] = sos_data['deactivated_at'].isoformat()
+            
             history_list.append({
-                "sos_id": sos_id,
-                **data
+                "sos_id": doc.id,
+                **sos_data
             })
-        
-        # Sort by timestamp (newest first)
-        history_list.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
         
         return jsonify({
             "success": True,
@@ -571,4 +637,4 @@ def internal_error(error):
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    app.run(host='0.0.0.0', port=port, debug=False)
