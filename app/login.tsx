@@ -1,228 +1,230 @@
+// app/auth/login.tsx - Login Screen
 import { Ionicons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
+import { router } from 'expo-router';
 import { useState } from 'react';
-import {
-    Alert,
-    KeyboardAvoidingView,
-    Platform,
-    Pressable,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
-} from 'react-native';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { authAPI } from '../src/services/api';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const router = useRouter();
 
   const handleLogin = async () => {
+    // Validation
     if (!email || !password) {
-      Alert.alert('Error', 'Please fill in all fields');
+      Alert.alert('Missing Fields', 'Please enter both email and password');
       return;
     }
 
+    if (!email.includes('@')) {
+      Alert.alert('Invalid Email', 'Please enter a valid email address');
+      return;
+    }
+
+    setIsLoading(true);
+
     try {
-      // Get stored user data
-      const userDataStr = await AsyncStorage.getItem('userData');
-      const storedPassword = await AsyncStorage.getItem('userPassword');
+      console.log('🔐 Attempting login...');
+      
+      const response = await authAPI.login({
+        email: email.trim().toLowerCase(),
+        password: password
+      });
 
-      if (!userDataStr || !storedPassword) {
-        Alert.alert('Error', 'No account found. Please sign up first.');
-        return;
-      }
+      console.log('✅ Login successful:', response.user_id);
 
-      const userData = JSON.parse(userDataStr);
-
-      // Check credentials (in real app, validate with backend)
-      if (userData.email === email && storedPassword === password) {
-        await AsyncStorage.setItem('isLoggedIn', 'true');
-        Alert.alert('Success', 'Login successful!', [
+      Alert.alert(
+        'Welcome Back!',
+        `Logged in as ${response.user?.name || email}`,
+        [
           {
             text: 'OK',
-            onPress: () => router.replace('/'),
-          },
-        ]);
-      } else {
-        Alert.alert('Error', 'Invalid email or password');
+            onPress: () => {
+              // Navigate to home screen
+              router.replace('/');
+            }
+          }
+        ]
+      );
+
+    } catch (error: any) {
+      console.error('❌ Login failed:', error);
+      
+      let errorMessage = 'Login failed. Please check your credentials.';
+      
+      if (error.response?.data?.error) {
+        errorMessage = error.response.data.error;
+      } else if (error.message) {
+        errorMessage = error.message;
       }
-    } catch (error) {
-      Alert.alert('Error', 'Failed to login');
+
+      Alert.alert('Login Failed', errorMessage);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   return (
-    <LinearGradient colors={['#0A0A0A', '#1A1A1A', '#2A1A1A']} style={styles.container}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.keyboardView}
-      >
-        <View style={styles.content}>
-          {/* Header */}
-          <View style={styles.header}>
-            <Ionicons name="shield-checkmark" size={60} color="#FF3B30" />
-            <Text style={styles.title}>Welcome Back</Text>
-            <Text style={styles.subtitle}>Login to R.A.K.S.H.A</Text>
-          </View>
+    <KeyboardAvoidingView 
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
+      <View style={styles.header}>
+        <Ionicons name="shield-checkmark" size={80} color="#FF4757" />
+        <Text style={styles.title}>R.A.K.S.H.A</Text>
+        <Text style={styles.subtitle}>Safety Guardian</Text>
+      </View>
 
-          {/* Form */}
-          <View style={styles.form}>
-            {/* Email Input */}
-            <View style={styles.inputContainer}>
-              <Ionicons name="mail-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
-              <TextInput
-                style={styles.input}
-                placeholder="Email Address"
-                placeholderTextColor="#8E8E93"
-                value={email}
-                onChangeText={setEmail}
-                keyboardType="email-address"
-                autoCapitalize="none"
-              />
-            </View>
-
-            {/* Password Input */}
-            <View style={styles.inputContainer}>
-              <Ionicons name="lock-closed-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
-              <TextInput
-                style={styles.input}
-                placeholder="Password"
-                placeholderTextColor="#8E8E93"
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry={!showPassword}
-                autoCapitalize="none"
-              />
-              <Pressable onPress={() => setShowPassword(!showPassword)} style={styles.eyeIcon}>
-                <Ionicons
-                  name={showPassword ? 'eye-outline' : 'eye-off-outline'}
-                  size={20}
-                  color="#8E8E93"
-                />
-              </Pressable>
-            </View>
-
-            {/* Forgot Password */}
-            <Pressable style={styles.forgotPassword}>
-              <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
-            </Pressable>
-
-            {/* Login Button */}
-            <Pressable style={styles.loginButton} onPress={handleLogin}>
-              <LinearGradient
-                colors={['#FF3B30', '#FF6B30']}
-                style={styles.loginButtonGradient}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-              >
-                <Text style={styles.loginButtonText}>Login</Text>
-              </LinearGradient>
-            </Pressable>
-
-            {/* Sign Up Link */}
-            <View style={styles.signUpContainer}>
-              <Text style={styles.signUpText}>Don't have an account? </Text>
-              <Pressable onPress={() => router.push('signup' as any)}>
-                <Text style={styles.signUpLink}>Sign Up</Text>
-              </Pressable>
-            </View>
-          </View>
+      <View style={styles.form}>
+        {/* Email Input */}
+        <View style={styles.inputContainer}>
+          <Ionicons name="mail" size={20} color="#7F8C8D" style={styles.inputIcon} />
+          <TextInput
+            style={styles.input}
+            placeholder="Email"
+            placeholderTextColor="#95A5A6"
+            value={email}
+            onChangeText={setEmail}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+            editable={!isLoading}
+          />
         </View>
-      </KeyboardAvoidingView>
-    </LinearGradient>
+
+        {/* Password Input */}
+        <View style={styles.inputContainer}>
+          <Ionicons name="lock-closed" size={20} color="#7F8C8D" style={styles.inputIcon} />
+          <TextInput
+            style={styles.input}
+            placeholder="Password"
+            placeholderTextColor="#95A5A6"
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry={!showPassword}
+            autoCapitalize="none"
+            editable={!isLoading}
+          />
+          <TouchableOpacity 
+            onPress={() => setShowPassword(!showPassword)}
+            style={styles.eyeIcon}
+          >
+            <Ionicons 
+              name={showPassword ? "eye-off" : "eye"} 
+              size={20} 
+              color="#7F8C8D" 
+            />
+          </TouchableOpacity>
+        </View>
+
+        {/* Login Button */}
+        <TouchableOpacity 
+          style={[styles.loginButton, isLoading && styles.buttonDisabled]}
+          onPress={handleLogin}
+          disabled={isLoading}
+        >
+          {isLoading ? (
+            <ActivityIndicator color="white" />
+          ) : (
+            <Text style={styles.loginButtonText}>Login</Text>
+          )}
+        </TouchableOpacity>
+
+        {/* Register Link */}
+        <View style={styles.registerContainer}>
+          <Text style={styles.registerText}>Don't have an account? </Text>
+          <TouchableOpacity onPress={() => router.push('../signup')}>
+            <Text style={styles.registerLink}>Register</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-  },
-  keyboardView: {
-    flex: 1,
-  },
-  content: {
-    flex: 1,
-    justifyContent: 'center',
-    padding: 20,
+    backgroundColor: '#F8F9FA',
   },
   header: {
     alignItems: 'center',
-    marginBottom: 40,
+    marginTop: 80,
+    marginBottom: 50,
   },
   title: {
-    fontSize: 32,
+    fontSize: 36,
     fontWeight: 'bold',
-    color: '#FFFFFF',
+    color: '#2C3E50',
     marginTop: 20,
-    marginBottom: 8,
   },
   subtitle: {
     fontSize: 16,
-    color: '#8E8E93',
+    color: '#7F8C8D',
+    marginTop: 5,
   },
   form: {
-    width: '100%',
+    paddingHorizontal: 30,
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#1C1C1E',
+    backgroundColor: 'white',
     borderRadius: 12,
-    marginBottom: 16,
-    paddingHorizontal: 16,
-    borderWidth: 1,
-    borderColor: '#2C2C2E',
+    marginBottom: 15,
+    paddingHorizontal: 15,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
   inputIcon: {
-    marginRight: 12,
+    marginRight: 10,
   },
   input: {
     flex: 1,
-    color: '#FFFFFF',
+    paddingVertical: 15,
     fontSize: 16,
-    paddingVertical: 16,
+    color: '#2C3E50',
   },
   eyeIcon: {
-    padding: 8,
-  },
-  forgotPassword: {
-    alignSelf: 'flex-end',
-    marginBottom: 24,
-  },
-  forgotPasswordText: {
-    color: '#FF3B30',
-    fontSize: 14,
-    fontWeight: '600',
+    padding: 5,
   },
   loginButton: {
+    backgroundColor: '#FF4757',
     borderRadius: 12,
-    overflow: 'hidden',
-  },
-  loginButtonGradient: {
-    paddingVertical: 16,
+    paddingVertical: 15,
     alignItems: 'center',
+    marginTop: 10,
+    shadowColor: '#FF4757',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  buttonDisabled: {
+    opacity: 0.6,
   },
   loginButtonText: {
-    color: '#FFFFFF',
+    color: 'white',
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: 'bold',
   },
-  signUpContainer: {
+  registerContainer: {
     flexDirection: 'row',
     justifyContent: 'center',
-    marginTop: 24,
+    marginTop: 20,
   },
-  signUpText: {
-    color: '#8E8E93',
+  registerText: {
+    color: '#7F8C8D',
     fontSize: 14,
   },
-  signUpLink: {
-    color: '#FF3B30',
+  registerLink: {
+    color: '#FF4757',
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: 'bold',
   },
 });

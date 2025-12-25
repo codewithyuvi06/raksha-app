@@ -1,254 +1,221 @@
-import { useEffect, useState } from 'react';
+// test-backend.tsx - Test Backend Connection
+import { useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { getConfig } from '../config/api';
-import { getAlertHistory, registerUser, testConnection, triggerSOS } from '../services/apiService';
+import { authAPI, contactsAPI, healthAPI, sosAPI } from './services/api';
+import { API_CONFIG } from './services/api/config';
 
-export default function TestBackendConnection() {
-  const [status, setStatus] = useState('Not tested');
-  const [userId, setUserId] = useState(null);
-  const [logs, setLogs] = useState([]);
+export default function TestBackend() {
+  const [results, setResults] = useState([]);
 
-  const addLog = (message, type = 'info') => {
-    const emoji = type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️';
-    setLogs(prev => [...prev, `${emoji} ${message}`]);
+  const addResult = (message) => {
+    setResults(prev => [...prev, `${new Date().toLocaleTimeString()}: ${message}`]);
   };
 
-  // Test 1: Connection
-  const handleTestConnection = async () => {
-    setLogs([]);
-    addLog('Testing backend connection...');
-    
-    const config = getConfig();
-    addLog(`Backend: ${config.baseURL}`);
-    
+  const testHealth = async () => {
+    addResult('🧪 Testing health endpoint...');
     try {
-      const result = await testConnection();
-      
-      if (result.connected) {
-        setStatus('✅ Connected');
-        addLog('Backend is reachable!', 'success');
-        addLog(`Version: ${result.data.version}`, 'info');
-        Alert.alert('Success!', 'Backend is connected and working!');
-      } else {
-        setStatus('❌ Not Connected');
-        addLog('Cannot connect to backend', 'error');
-        addLog(result.error, 'error');
-        Alert.alert('Connection Failed', result.hint || result.error);
-      }
+      const response = await healthAPI.checkHealth();
+      addResult(`✅ Health check passed: ${response.status}`);
+      Alert.alert('Success', 'Backend is reachable!');
     } catch (error) {
-      setStatus('❌ Error');
-      addLog(`Error: ${error.message}`, 'error');
-      Alert.alert('Error', error.message);
+      addResult(`❌ Health check failed: ${error.message}`);
+      Alert.alert('Failed', `Cannot reach backend.\n\nMake sure:\n1. Flask server is running\n2. You're on the same WiFi\n3. IP address is correct in config.ts`);
     }
   };
 
-  // Test 2: Register User
-  const handleTestRegister = async () => {
-    addLog('Testing user registration...');
-    
+  const testRegister = async () => {
+    addResult('🧪 Testing registration...');
     try {
-      const userData = {
-        phone: '+919876543210',
-        name: 'App Test User',
-        email: 'apptest@raksha.app',
-        emergencyContacts: [
-          {
-            name: 'Test Contact',
-            phone: '+919876543211',
-            relation: 'Friend'
-          }
-        ]
+      const testUser = {
+        email: `test${Date.now()}@example.com`,
+        password: 'Test123!',
+        name: 'Test User',
+        phone: `+91${Math.floor(1000000000 + Math.random() * 9000000000)}`
       };
       
-      const result = await registerUser(userData);
-      
-      if (result.success) {
-        setUserId(result.data.userId);
-        addLog(`User registered: ${result.data.userId}`, 'success');
-        Alert.alert('Success!', `User registered!\nID: ${result.data.userId}`);
-      }
+      const response = await authAPI.register(testUser);
+      addResult(`✅ Registration successful: ${response.user_id}`);
+      Alert.alert('Success', `User registered!\nUser ID: ${response.user_id}`);
     } catch (error) {
-      addLog(`Registration failed: ${error.message}`, 'error');
-      Alert.alert('Registration Failed', error.message);
+      addResult(`❌ Registration failed: ${error.response?.data?.error || error.message}`);
+      Alert.alert('Failed', error.response?.data?.error || error.message);
     }
   };
 
-  // Test 3: Trigger SOS
-  const handleTestSOS = async () => {
-    if (!userId) {
-      Alert.alert('Error', 'Please register user first!');
+  const testSOS = async () => {
+    addResult('🧪 Testing SOS trigger...');
+    
+    const isLoggedIn = await authAPI.isLoggedIn();
+    if (!isLoggedIn) {
+      addResult('❌ Not logged in. Register first.');
+      Alert.alert('Error', 'Please register/login first');
       return;
     }
-    
-    addLog('Testing SOS alert...');
-    
+
     try {
-      const location = {
-        latitude: 22.5726,
-        longitude: 88.3639,
-        address: 'Test Location, Kolkata'
-      };
-      
-      const result = await triggerSOS(userId, location, 'manual');
-      
-      if (result.success) {
-        addLog(`SOS triggered! Alert ID: ${result.data.alertId}`, 'success');
-        addLog(`Contacts notified: ${result.data.contactsNotified}`, 'success');
-        Alert.alert(
-          'SOS Triggered!', 
-          `Alert ID: ${result.data.alertId}\nContacts notified: ${result.data.contactsNotified}\n\nCheck phones for SMS!`
-        );
-      }
+      const response = await sosAPI.triggerSOS({
+        location: {
+          latitude: 28.6139,
+          longitude: 77.2090
+        },
+        trigger_type: 'manual'
+      });
+      addResult(`✅ SOS triggered: ${response.sos_id}`);
+      Alert.alert('Success', `SOS sent!\nID: ${response.sos_id}\nLocation: ${response.location_url}`);
     } catch (error) {
-      addLog(`SOS failed: ${error.message}`, 'error');
-      Alert.alert('SOS Failed', error.message);
+      addResult(`❌ SOS failed: ${error.response?.data?.error || error.message}`);
+      Alert.alert('Failed', error.response?.data?.error || error.message);
     }
   };
 
-  // Test 4: Get History
-  const handleTestHistory = async () => {
-    if (!userId) {
-      Alert.alert('Error', 'Please register user first!');
+  const testContacts = async () => {
+    addResult('🧪 Testing contacts...');
+    
+    const isLoggedIn = await authAPI.isLoggedIn();
+    if (!isLoggedIn) {
+      addResult('❌ Not logged in. Register first.');
+      Alert.alert('Error', 'Please register/login first');
       return;
     }
-    
-    addLog('Testing alert history...');
-    
+
     try {
-      const result = await getAlertHistory(userId);
+      // Add test contacts
+      const testContacts = [
+        { name: 'Emergency Contact 1', phone: '+919876543210', relation: 'Friend' },
+        { name: 'Emergency Contact 2', phone: '+919876543211', relation: 'Family' }
+      ];
       
-      if (result.success) {
-        addLog(`Found ${result.count} alerts`, 'success');
-        Alert.alert('History Retrieved', `Found ${result.count} alerts`);
-      }
+      await contactsAPI.updateContacts(testContacts);
+      addResult(`✅ Contacts updated: ${testContacts.length}`);
+      
+      // Get contacts
+      const response = await contactsAPI.getContacts();
+      addResult(`✅ Contacts retrieved: ${response.count}`);
+      Alert.alert('Success', `Contacts added: ${response.count}`);
     } catch (error) {
-      addLog(`History failed: ${error.message}`, 'error');
-      Alert.alert('History Failed', error.message);
+      addResult(`❌ Contacts failed: ${error.response?.data?.error || error.message}`);
+      Alert.alert('Failed', error.response?.data?.error || error.message);
     }
   };
 
-  // Auto-test on mount
-  useEffect(() => {
-    handleTestConnection();
-  }, []);
+  const clearResults = () => {
+    setResults([]);
+  };
 
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Backend Connection Test</Text>
-        <Text style={styles.status}>Status: {status}</Text>
-        <Text style={styles.config}>Backend: {getConfig().baseURL}</Text>
+    <View style={styles.container}>
+      <Text style={styles.title}>Backend Connection Test</Text>
+      
+      <View style={styles.infoCard}>
+        <Text style={styles.infoLabel}>Backend URL:</Text>
+        <Text style={styles.infoValue}>{API_CONFIG.BASE_URL}</Text>
       </View>
 
       <View style={styles.buttonContainer}>
-        <TouchableOpacity style={styles.button} onPress={handleTestConnection}>
-          <Text style={styles.buttonText}>1. Test Connection</Text>
+        <TouchableOpacity style={styles.button} onPress={testHealth}>
+          <Text style={styles.buttonText}>1. Test Health</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.button} onPress={handleTestRegister}>
-          <Text style={styles.buttonText}>2. Register User</Text>
+        <TouchableOpacity style={styles.button} onPress={testRegister}>
+          <Text style={styles.buttonText}>2. Test Register</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.button} onPress={handleTestSOS}>
-          <Text style={styles.buttonText}>3. Trigger SOS</Text>
+        <TouchableOpacity style={styles.button} onPress={testSOS}>
+          <Text style={styles.buttonText}>3. Test SOS</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.button} onPress={handleTestHistory}>
-          <Text style={styles.buttonText}>4. Get History</Text>
+        <TouchableOpacity style={styles.button} onPress={testContacts}>
+          <Text style={styles.buttonText}>4. Test Contacts</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={[styles.button, styles.clearButton]} onPress={clearResults}>
+          <Text style={styles.buttonText}>Clear Results</Text>
         </TouchableOpacity>
       </View>
 
-      {userId && (
-        <View style={styles.userIdContainer}>
-          <Text style={styles.userIdLabel}>User ID:</Text>
-          <Text style={styles.userId}>{userId}</Text>
-        </View>
-      )}
-
-      <View style={styles.logsContainer}>
-        <Text style={styles.logsTitle}>Logs:</Text>
-        {logs.map((log, index) => (
-          <Text key={index} style={styles.logText}>{log}</Text>
-        ))}
-      </View>
-    </ScrollView>
+      <ScrollView style={styles.resultsContainer}>
+        <Text style={styles.resultsTitle}>Test Results:</Text>
+        {results.length === 0 ? (
+          <Text style={styles.noResults}>No tests run yet</Text>
+        ) : (
+          results.map((result, index) => (
+            <Text key={index} style={styles.resultText}>{result}</Text>
+          ))
+        )}
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  header: {
-    backgroundColor: '#6200ee',
+    backgroundColor: '#F8F9FA',
     padding: 20,
-    paddingTop: 50,
   },
   title: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: 'white',
-    marginBottom: 10,
+    color: '#2C3E50',
+    textAlign: 'center',
+    marginTop: 40,
+    marginBottom: 20,
   },
-  status: {
-    fontSize: 16,
-    color: 'white',
+  infoCard: {
+    backgroundColor: 'white',
+    padding: 15,
+    borderRadius: 10,
+    marginBottom: 20,
+  },
+  infoLabel: {
+    fontSize: 12,
+    color: '#7F8C8D',
     marginBottom: 5,
   },
-  config: {
+  infoValue: {
     fontSize: 12,
-    color: 'rgba(255,255,255,0.8)',
+    color: '#2C3E50',
+    fontFamily: 'monospace',
   },
   buttonContainer: {
-    padding: 20,
+    marginBottom: 20,
   },
   button: {
-    backgroundColor: '#6200ee',
+    backgroundColor: '#5F27CD',
     padding: 15,
-    borderRadius: 8,
+    borderRadius: 10,
     marginBottom: 10,
+  },
+  clearButton: {
+    backgroundColor: '#E74C3C',
   },
   buttonText: {
     color: 'white',
-    fontSize: 16,
-    fontWeight: 'bold',
     textAlign: 'center',
+    fontSize: 16,
+    fontWeight: '600',
   },
-  userIdContainer: {
-    backgroundColor: 'white',
+  resultsContainer: {
+    flex: 1,
+    backgroundColor: '#2C3E50',
+    borderRadius: 10,
     padding: 15,
-    marginHorizontal: 20,
-    marginBottom: 10,
-    borderRadius: 8,
   },
-  userIdLabel: {
-    fontSize: 12,
-    color: '#666',
-    marginBottom: 5,
-  },
-  userId: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  logsContainer: {
-    backgroundColor: 'white',
-    padding: 15,
-    marginHorizontal: 20,
-    marginBottom: 20,
-    borderRadius: 8,
-  },
-  logsTitle: {
+  resultsTitle: {
+    color: 'white',
     fontSize: 16,
     fontWeight: 'bold',
     marginBottom: 10,
-    color: '#333',
   },
-  logText: {
+  resultText: {
+    color: '#ECF0F1',
     fontSize: 12,
-    color: '#666',
     marginBottom: 5,
     fontFamily: 'monospace',
+  },
+  noResults: {
+    color: '#7F8C8D',
+    fontSize: 14,
+    fontStyle: 'italic',
   },
 });

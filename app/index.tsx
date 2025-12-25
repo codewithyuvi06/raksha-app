@@ -1,284 +1,354 @@
+// app/index.tsx - Home Screen with Flask Backend Integration
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
-import { useState } from 'react';
-import { Alert, Pressable, SafeAreaView, StyleSheet, Text, Vibration, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as Location from 'expo-location';
+import { useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { authAPI, contactsAPI, profileAPI, sosAPI } from '../src/services/api';
 
 export default function HomeScreen() {
-  const [isPressed, setIsPressed] = useState(false);
-  const [countdown, setCountdown] = useState(0);
-  const [isMonitoring, setIsMonitoring] = useState(true);
-  const insets = useSafeAreaInsets();
+  const [location, setLocation] = useState<Location.LocationObject | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [userName, setUserName] = useState('User');
+  const [contactsCount, setContactsCount] = useState(0);
 
-  const handlePressIn = () => {
-    setIsPressed(true);
-    Vibration.vibrate(100);
+  useEffect(() => {
+    checkLoginStatus();
+    requestLocationPermission();
+    loadContacts();
+  }, []);
+
+  const checkLoginStatus = async () => {
+    const loggedIn = await authAPI.isLoggedIn();
+    setIsLoggedIn(loggedIn);
     
-    // Start countdown (3 seconds to trigger)
-    let count = 3;
-    setCountdown(count);
-    
-    const interval = setInterval(() => {
-      count--;
-      setCountdown(count);
-      Vibration.vibrate(50);
-      
-      if (count <= 0) {
-        clearInterval(interval);
-        triggerEmergency();
+    if (loggedIn) {
+      try {
+        const profile = await profileAPI.getProfile();
+        setUserName(profile.data?.profile?.name || 'User');
+      } catch (error) {
+        console.error('Failed to load profile');
       }
-    }, 1000);
-
-    // Store interval to clear on release
-    // @ts-ignore
-    global.emergencyInterval = interval;
-  };
-
-  const handlePressOut = () => {
-    setIsPressed(false);
-    setCountdown(0);
-    // @ts-ignore
-    if (global.emergencyInterval) {
-      // @ts-ignore
-      clearInterval(global.emergencyInterval);
     }
   };
 
-  const triggerEmergency = () => {
-    Vibration.vibrate([0, 500, 200, 500]);
+  const requestLocationPermission = async () => {
+    try {
+      let { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Denied', 'Location permission is required for emergency alerts');
+        return;
+      }
+      let location = await Location.getCurrentPositionAsync({});
+      setLocation(location);
+      console.log('📍 Location obtained:', location.coords.latitude, location.coords.longitude);
+    } catch (error) {
+      console.error('Location error:', error);
+      Alert.alert('Location Error', 'Could not get your location');
+    }
+  };
+
+  const loadContacts = async () => {
+    try {
+      const response = await contactsAPI.getContacts();
+      setContactsCount(response.count || 0);
+    } catch (error) {
+      console.error('Failed to load contacts');
+    }
+  };
+
+  const handleEmergency = async () => {
+    if (!isLoggedIn) {
+      Alert.alert('Not Logged In', 'Please login to use emergency features');
+      return;
+    }
+
+    if (!location) {
+      Alert.alert('Location Required', 'Getting your location...');
+      await requestLocationPermission();
+      return;
+    }
+
     Alert.alert(
-      '🚨 Emergency Alert Triggered!',
-      'Alert sent to your emergency contacts with your location.',
-      [{ text: 'OK' }]
+      '🚨 EMERGENCY ALERT',
+      'This will send an emergency alert to all your contacts with your location. Continue?',
+      [
+        { 
+          text: 'Cancel', 
+          style: 'cancel' 
+        },
+        {
+          text: 'SEND ALERT',
+          style: 'destructive',
+          onPress: sendEmergencyAlert
+        }
+      ]
     );
-    setIsPressed(false);
-    setCountdown(0);
+  };
+
+  const sendEmergencyAlert = async () => {
+    setIsLoading(true);
+    try {
+      if (!location) {
+        throw new Error('Location not available');
+      }
+
+      console.log('🚨 Triggering SOS...');
+      
+      const response = await sosAPI.triggerSOS({
+        location: {
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude
+        },
+        trigger_type: 'manual'
+      });
+
+      console.log('✅ SOS Response:', response);
+
+      Alert.alert(
+        '✅ Alert Sent!',
+        `Emergency alert sent successfully!\n\nSOS ID: ${response.sos_id}\n\nYour emergency contacts have been notified with your location.`,
+        [
+          {
+            text: 'View Location',
+            onPress: () => {
+              console.log('Location URL:', response.location_url);
+              // You can open the URL with Linking.openURL(response.location_url)
+            }
+          },
+          { text: 'OK' }
+        ]
+      );
+
+    } catch (error: any) {
+      console.error('❌ Emergency alert failed:', error);
+      
+      let errorMessage = 'Failed to send emergency alert. Please try again.';
+      
+      if (error.response?.data?.error) {
+        errorMessage = error.response.data.error;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+
+      Alert.alert('Error', errorMessage);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#0A0A0A' }}>
-      <LinearGradient
-        colors={['#0A0A0A', '#1A1A1A', '#2A1A1A']}
-        style={styles.container}
+    <View style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.title}>🛡️ R.A.K.S.H.A</Text>
+        <Text style={styles.subtitle}>Safety Guardian</Text>
+      </View>
+
+      {/* User Info */}
+      {isLoggedIn && (
+        <View style={styles.userInfo}>
+          <Text style={styles.userName}>Welcome, {userName}</Text>
+          <Text style={styles.contactsInfo}>
+            {contactsCount} Emergency Contact{contactsCount !== 1 ? 's' : ''}
+          </Text>
+        </View>
+      )}
+
+      {/* Emergency Button */}
+      <TouchableOpacity 
+        style={[styles.emergencyButton, isLoading && styles.buttonDisabled]}
+        onPress={handleEmergency}
+        activeOpacity={0.8}
+        disabled={isLoading}
       >
-        {/* Header */}
-        <View style={styles.header}>
-          <Text style={styles.appTitle}>Safety Guardian</Text>
-          <View style={styles.statusContainer}>
-            <View style={[styles.statusDot, isMonitoring && styles.statusActive]} />
-            <Text style={styles.statusText}>
-              {isMonitoring ? 'Monitoring Active' : 'Monitoring Off'}
+        {isLoading ? (
+          <ActivityIndicator size="large" color="white" />
+        ) : (
+          <>
+            <Ionicons name="warning" size={70} color="white" />
+            <Text style={styles.emergencyText}>EMERGENCY</Text>
+            <Text style={styles.emergencySubtext}>Tap to send alert</Text>
+          </>
+        )}
+      </TouchableOpacity>
+
+      {/* Status Cards */}
+      <View style={styles.statusContainer}>
+        {/* Location Status */}
+        <View style={styles.statusCard}>
+          <Ionicons 
+            name={location ? "location" : "location-outline"} 
+            size={24} 
+            color={location ? "#2ECC71" : "#95A5A6"} 
+          />
+          <View style={styles.statusTextContainer}>
+            <Text style={styles.statusLabel}>Location</Text>
+            <Text style={styles.statusValue}>
+              {location 
+                ? `${location.coords.latitude.toFixed(4)}, ${location.coords.longitude.toFixed(4)}`
+                : 'Getting location...'}
             </Text>
           </View>
         </View>
 
-        {/* Stats Cards */}
-        <View style={styles.statsContainer}>
-          <View style={styles.statCard}>
-            <Ionicons name="location" size={24} color="#34C759" />
-            <Text style={styles.statValue}>Active</Text>
-            <Text style={styles.statLabel}>Location</Text>
-          </View>
-          
-          <View style={styles.statCard}>
-            <Ionicons name="people" size={24} color="#007AFF" />
-            <Text style={styles.statValue}>3</Text>
-            <Text style={styles.statLabel}>Contacts</Text>
-          </View>
-          
-          <View style={styles.statCard}>
-            <Ionicons name="shield-checkmark" size={24} color="#FF9500" />
-            <Text style={styles.statValue}>Safe</Text>
-            <Text style={styles.statLabel}>Status</Text>
+        {/* Connection Status */}
+        <View style={styles.statusCard}>
+          <Ionicons 
+            name={isLoggedIn ? "shield-checkmark" : "shield-outline"} 
+            size={24} 
+            color={isLoggedIn ? "#2ECC71" : "#E74C3C"} 
+          />
+          <View style={styles.statusTextContainer}>
+            <Text style={styles.statusLabel}>Status</Text>
+            <Text style={styles.statusValue}>
+              {isLoggedIn ? 'Protected' : 'Not Logged In'}
+            </Text>
           </View>
         </View>
+      </View>
 
-        {/* Emergency Button */}
-        <View style={styles.buttonContainer}>
-          <Pressable
-            style={[styles.button, isPressed && styles.buttonPressed]}
-            onPressIn={handlePressIn}
-            onPressOut={handlePressOut}
-          >
-            <View style={styles.buttonInner}>
-              <Text style={styles.buttonText}>
-                {countdown > 0 ? countdown : 'SOS'}
-              </Text>
-              <Text style={styles.buttonSubText}>
-                {countdown > 0 ? 'Releasing will cancel' : 'Press & Hold 3s'}
-              </Text>
-            </View>
-            
-            {/* Animated rings */}
-            {!isPressed && (
-              <>
-                <View style={[styles.ring, styles.ring1]} />
-                <View style={[styles.ring, styles.ring2]} />
-              </>
-            )}
-          </Pressable>
-          
-          <Text style={styles.instructionText}>
-            Hold the button for 3 seconds to trigger emergency alert
-          </Text>
-        </View>
+      {/* Quick Actions */}
+      <View style={styles.quickActions}>
+        <TouchableOpacity 
+          style={styles.actionButton}
+          onPress={() => {/* Navigate to contacts screen */}}
+        >
+          <Ionicons name="people" size={24} color="#5F27CD" />
+          <Text style={styles.actionText}>Contacts</Text>
+        </TouchableOpacity>
 
-        {/* Quick Actions with bottom safe area */}
-        <View style={[styles.quickActions, { marginBottom: insets.bottom > 0 ? 0 : 20 }]}>
-          <Pressable style={styles.actionButton}>
-            <Ionicons name="call" size={24} color="#FFFFFF" />
-            <Text style={styles.actionText}>Call 911</Text>
-          </Pressable>
-          
-          <Pressable style={styles.actionButton}>
-            <Ionicons name="share-social" size={24} color="#FFFFFF" />
-            <Text style={styles.actionText}>Share Location</Text>
-          </Pressable>
-        </View>
-      </LinearGradient>
-    </SafeAreaView>
+        <TouchableOpacity 
+          style={styles.actionButton}
+          onPress={() => {/* Navigate to history screen */}}
+        >
+          <Ionicons name="time" size={24} color="#5F27CD" />
+          <Text style={styles.actionText}>History</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity 
+          style={styles.actionButton}
+          onPress={() => {/* Navigate to settings */}}
+        >
+          <Ionicons name="settings" size={24} color="#5F27CD" />
+          <Text style={styles.actionText}>Settings</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#F8F9FA',
     padding: 20,
   },
   header: {
-    marginTop: 20,
-    marginBottom: 30,
+    alignItems: 'center',
+    marginTop: 40,
+    marginBottom: 20,
   },
-  appTitle: {
+  title: {
     fontSize: 32,
     fontWeight: 'bold',
-    color: '#FFFFFF',
-    marginBottom: 12,
+    color: '#2C3E50',
   },
-  statusContainer: {
-    flexDirection: 'row',
+  subtitle: {
+    fontSize: 16,
+    color: '#7F8C8D',
+    marginTop: 5,
+  },
+  userInfo: {
+    backgroundColor: 'white',
+    padding: 15,
+    borderRadius: 10,
+    marginBottom: 20,
     alignItems: 'center',
   },
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#8E8E93',
-    marginRight: 8,
+  userName: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#2C3E50',
   },
-  statusActive: {
-    backgroundColor: '#34C759',
-  },
-  statusText: {
+  contactsInfo: {
     fontSize: 14,
-    color: '#8E8E93',
+    color: '#7F8C8D',
+    marginTop: 5,
   },
-  statsContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 40,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: '#1C1C1E',
-    borderRadius: 16,
-    padding: 16,
-    marginHorizontal: 4,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#2C2C2E',
-  },
-  statValue: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    marginTop: 8,
-  },
-  statLabel: {
-    fontSize: 12,
-    color: '#8E8E93',
-    marginTop: 4,
-  },
-  buttonContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  button: {
+  emergencyButton: {
     width: 220,
     height: 220,
     borderRadius: 110,
-    backgroundColor: '#FF3B30',
+    backgroundColor: '#FF4757',
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#FF3B30',
-    shadowOffset: { width: 0, height: 0 },
+    alignSelf: 'center',
+    marginVertical: 30,
+    shadowColor: '#FF4757',
+    shadowOffset: { width: 0, height: 10 },
     shadowOpacity: 0.5,
     shadowRadius: 20,
-    elevation: 10,
+    elevation: 15,
   },
-  buttonPressed: {
-    backgroundColor: '#CC0000',
-    transform: [{ scale: 0.95 }],
-    shadowOpacity: 0.8,
+  buttonDisabled: {
+    opacity: 0.6,
   },
-  buttonInner: {
-    alignItems: 'center',
-  },
-  buttonText: {
-    fontSize: 56,
+  emergencyText: {
+    color: 'white',
+    fontSize: 24,
     fontWeight: 'bold',
-    color: '#FFFFFF',
+    marginTop: 10,
   },
-  buttonSubText: {
-    fontSize: 14,
-    color: '#FFFFFF',
-    marginTop: 8,
+  emergencySubtext: {
+    color: 'white',
+    fontSize: 12,
+    marginTop: 5,
     opacity: 0.9,
   },
-  ring: {
-    position: 'absolute',
-    borderRadius: 200,
-    borderWidth: 2,
-    borderColor: '#FF3B30',
+  statusContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 20,
   },
-  ring1: {
-    width: 240,
-    height: 240,
-    opacity: 0.3,
+  statusCard: {
+    flex: 1,
+    flexDirection: 'row',
+    backgroundColor: 'white',
+    padding: 15,
+    borderRadius: 10,
+    marginHorizontal: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
-  ring2: {
-    width: 260,
-    height: 260,
-    opacity: 0.2,
+  statusTextContainer: {
+    marginLeft: 10,
+    flex: 1,
   },
-  instructionText: {
-    marginTop: 30,
-    fontSize: 14,
-    color: '#8E8E93',
-    textAlign: 'center',
-    paddingHorizontal: 40,
+  statusLabel: {
+    fontSize: 12,
+    color: '#7F8C8D',
+    marginBottom: 2,
+  },
+  statusValue: {
+    fontSize: 11,
+    color: '#2C3E50',
+    fontWeight: '600',
   },
   quickActions: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'space-around',
+    marginTop: 10,
   },
   actionButton: {
-    flex: 1,
-    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#1C1C1E',
-    borderRadius: 12,
-    padding: 16,
-    marginHorizontal: 4,
-    borderWidth: 1,
-    borderColor: '#2C2C2E',
+    padding: 15,
   },
   actionText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
-    marginLeft: 8,
+    marginTop: 5,
+    fontSize: 12,
+    color: '#2C3E50',
   },
 });
